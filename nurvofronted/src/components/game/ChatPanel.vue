@@ -76,6 +76,15 @@ function handleSend(): void {
   inputText.value = ''
 }
 
+function handleEnterKey(event: KeyboardEvent): void {
+  // Avoid sending while the IME is still composing Chinese characters.
+  if (event.isComposing || event.keyCode === 229) {
+    return
+  }
+  event.preventDefault()
+  handleSend()
+}
+
 function switchTarget(target: 'patient' | FamilySender): void {
   chatStore.setTarget(target)
 }
@@ -183,7 +192,7 @@ watch(
           :disabled="disabled"
           rows="1"
           class="input-textarea"
-          @keydown.enter.exact.prevent="handleSend"
+          @keydown.enter.exact="handleEnterKey"
         ></textarea>
         <button
           v-if="speechSupported"
