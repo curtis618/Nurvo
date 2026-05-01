@@ -63,6 +63,7 @@ async def generate_scenario_endpoint(body: GenerateScenarioRequest) -> dict:
     family_system_prompts = [
         build_family_prompt(
             family_name=fm.name,
+            gender=fm.gender,
             relationship=fm.relationship,
             personality=fm.personality,
             emotional_state=fm.emotional_state,

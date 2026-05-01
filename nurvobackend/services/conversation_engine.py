@@ -5,7 +5,7 @@ import re
 from fastapi import HTTPException
 from openai import AsyncOpenAI
 
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from config import OPENAI_API_KEY, OPENAI_CONVERSATION_MODEL, OPENAI_TIMEOUT
 from models.chat import GameSession
 from services.tts_service import get_family_voice, get_patient_voice
 
@@ -64,16 +64,35 @@ def _build_openai_messages(
     return messages
 
 
+def _patient_gender(session: GameSession) -> str:
+    patient = session.scenario_data.get("patient_profile", {})
+    if isinstance(patient, dict):
+        return str(patient.get("gender", ""))
+    return ""
+
+
+def _family_gender(session: GameSession, family_index: int) -> str:
+    family_members = session.scenario_data.get("family_members", [])
+    if not isinstance(family_members, list):
+        return ""
+    if family_index < 0 or family_index >= len(family_members):
+        return ""
+    member = family_members[family_index]
+    if isinstance(member, dict):
+        return str(member.get("gender", ""))
+    return ""
+
+
 async def get_npc_response(
     session: GameSession,
     nurse_message: str,
     target: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
     """Get an NPC response for the nurse's message.
 
-    Returns (npc_response_text, sender, audio_base64) where sender is
-    'patient' or 'family_0'/'family_1'/'family_2' and audio_base64 may be
-    empty on TTS failure.
+    Returns (npc_response_text, sender) where sender is 'patient' or
+    'family_0'/'family_1'/'family_2'. TTS is generated separately so text can
+    be delivered without waiting for audio synthesis.
     """
     if target == "patient":
         system_prompt = session.patient_system_prompt
@@ -90,11 +109,11 @@ async def get_npc_response(
 
     try:
         response = await _client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_CONVERSATION_MODEL,
             messages=messages,
             temperature=0.7,
             max_tokens=300,
-            timeout=5,
+            timeout=OPENAI_TIMEOUT,
         )
 
         content = response.choices[0].message.content
@@ -102,15 +121,7 @@ async def get_npc_response(
             raise HTTPException(status_code=502, detail="OpenAI returned empty NPC response")
 
         npc_text = _LABEL_RE.sub("", content.strip())
-
-        # Generate TTS audio (non-blocking; falls back to empty string)
-        if sender == "patient":
-            audio_base64 = await get_patient_voice(npc_text)
-        else:  # family_0 / family_1 / family_2
-            f_idx = int(sender.split("_")[1])
-            audio_base64 = await get_family_voice(npc_text, f_idx)
-
-        return npc_text, sender, audio_base64
+        return npc_text, sender
 
     except HTTPException:
         raise
@@ -121,22 +132,36 @@ async def get_npc_response(
         )
 
 
-async def maybe_family_interjection(session: GameSession) -> tuple[str, bool, str, int]:
+async def get_npc_audio(session: GameSession, npc_text: str, sender: str) -> str:
+    """Generate TTS audio for an already-created NPC response."""
+    if sender == "patient":
+        return await get_patient_voice(npc_text, _patient_gender(session))
+    if sender.startswith("family_") and sender in ("family_0", "family_1", "family_2"):
+        family_index = int(sender.split("_")[1])
+        return await get_family_voice(
+            npc_text,
+            family_index,
+            _family_gender(session, family_index),
+        )
+    raise HTTPException(status_code=400, detail=f"Invalid sender for TTS: {sender}")
+
+
+async def maybe_family_interjection(session: GameSession) -> tuple[str, bool, int]:
     """Use LLM to decide whether a family member should interject based on conversation content.
 
     Uses round-robin to pick one candidate family member per check to avoid
     tripling LLM costs.
 
-    Returns (interjection_text, did_interject, audio_base64, family_index).
+    Returns (interjection_text, did_interject, family_index).
     family_index is -1 when no interjection occurred.
     """
     # Enforce minimum gap between interjections
     messages_since = _count_messages_since_last_interjection(session)
     if messages_since < _MIN_INTERJECTION_GAP:
-        return "", False, "", -1
+        return "", False, -1
 
     if not session.family_system_prompts:
-        return "", False, "", -1
+        return "", False, -1
 
     # Round-robin: pick the next candidate family member
     candidate_index = (session.last_interjecting_family_index + 1) % len(session.family_system_prompts)
@@ -167,27 +192,26 @@ async def maybe_family_interjection(session: GameSession) -> tuple[str, bool, st
 
     try:
         response = await _client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=OPENAI_CONVERSATION_MODEL,
             messages=messages,
             temperature=0.7,
             max_tokens=100,
-            timeout=5,
+            timeout=OPENAI_TIMEOUT,
         )
 
         content = response.choices[0].message.content
         if not content:
-            return "", False, "", -1
+            return "", False, -1
 
         lines = content.strip().split("\n", 1)
         if lines[0].strip().upper() == "YES" and len(lines) > 1:
             interjection_text = _LABEL_RE.sub("", lines[1].strip())
             if not interjection_text:
-                return "", False, "", -1
-            audio_base64 = await get_family_voice(interjection_text, candidate_index)
-            return interjection_text, True, audio_base64, candidate_index
+                return "", False, -1
+            return interjection_text, True, candidate_index
 
-        return "", False, "", -1
+        return "", False, -1
 
     except Exception:
         # Don't fail the main flow for an interjection error
-        return "", False, "", -1
+        return "", False, -1

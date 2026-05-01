@@ -37,22 +37,25 @@ def _json_skeleton_for_prompt() -> str:
             },
             "family_members": [
                 {
-                    "name": "家屬1姓名",
-                    "relationship": "與病患關係",
+                    "name": "王太太",
+                    "gender": "女",
+                    "relationship": "配偶",
                     "personality": "性格類型",
                     "emotional_state": "當前情緒狀態描述",
                     "interjection_triggers": ["會觸發插話的話題或情況"],
                 },
                 {
-                    "name": "家屬2姓名",
-                    "relationship": "與病患關係（不同於家屬1）",
+                    "name": "王先生",
+                    "gender": "男",
+                    "relationship": "兒子",
                     "personality": "性格類型（不同於家屬1）",
                     "emotional_state": "當前情緒狀態描述",
                     "interjection_triggers": ["會觸發插話的話題或情況"],
                 },
                 {
-                    "name": "家屬3姓名",
-                    "relationship": "與病患關係（不同於家屬1和2）",
+                    "name": "林小姐",
+                    "gender": "女",
+                    "relationship": "女兒",
                     "personality": "性格類型（不同於家屬1和2）",
                     "emotional_state": "當前情緒狀態描述",
                     "interjection_triggers": ["會觸發插話的話題或情況"],
@@ -100,9 +103,10 @@ def build_scenario_generation_prompt(difficulty: str) -> str:
 要求：
 1. 每次生成的情境必須獨特，包括不同的疼痛原因、位置和程度
 2. 病患的疼痛描述要模糊且不具體，需要護理師透過引導來釐清
-3. 必須生成 3 位家屬，每位的姓名、與病患關係、性格類型各不相同，且會影響溝通過程
-4. 所有文字使用繁體中文
-5. 情境要符合真實臨床場景
-6. 依難度調整家屬與溝通挑戰的強度
-7. time_limit_seconds 可填列示值；伺服器端可能依難度再校正
-8. 只回傳 JSON，不要有其他文字"""
+3. 必須生成 3 位家屬，每位都必須有 gender（男或女），且姓名、與病患關係、性格類型各不相同，並會影響溝通過程
+4. 病患與家屬的姓名稱謂、relationship 與 gender 必須一致：例如「王先生 + 男」、「王太太 + 女」、「林小姐 + 女」、「兒子 + 男」、「女兒 + 女」、「孫子 + 男」、「孫女 + 女」。禁止產生「王先生 + 女」、「王太太 + 男」、「兒子 + 女」、「女兒 + 男」、「孫女 + 男」、「孫子 + 女」這類不一致組合
+5. 所有文字使用繁體中文
+6. 情境要符合真實臨床場景
+7. 依難度調整家屬與溝通挑戰的強度
+8. time_limit_seconds 可填列示值；伺服器端可能依難度再校正
+9. 只回傳 JSON，不要有其他文字"""

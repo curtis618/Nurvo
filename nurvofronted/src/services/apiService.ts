@@ -56,10 +56,27 @@ function createMockScenarioResponse(difficulty: ScenarioDifficulty = 'medium'): 
       family_members: [
         {
           name: '王太太',
+          gender: '女',
           relationship: '配偶',
           personality: '焦慮、保護性高',
           emotional_state: '擔心手術後恢復狀況',
           interjection_triggers: ['疼痛惡化', '等待過久', '資訊不清楚'],
+        },
+        {
+          name: '王先生',
+          gender: '男',
+          relationship: '兒子',
+          personality: '理性但急切',
+          emotional_state: '擔心疼痛是否代表併發症',
+          interjection_triggers: ['手術風險', '藥物副作用', '病況變化'],
+        },
+        {
+          name: '林小姐',
+          gender: '女',
+          relationship: '女兒',
+          personality: '細心、容易追問細節',
+          emotional_state: '不安且想確認後續照護',
+          interjection_triggers: ['照護計畫不清楚', '出院安排', '疼痛控制'],
         },
       ],
       communication_challenges: challengeMap[difficulty],

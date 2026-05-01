@@ -71,7 +71,12 @@ function handleMessage(event: MessageEvent) {
         audio_base64: data.audio_base64,
       }
       chatStore.setTyping(null)
+      chatStore.clearError()
       chatStore.addMessage(message)
+      break
+    }
+    case 'npc_audio': {
+      chatStore.setMessageAudio(data.message_id, data.audio_base64)
       break
     }
     case 'typing': {
@@ -93,6 +98,8 @@ function handleMessage(event: MessageEvent) {
     }
     case 'error': {
       console.error('[wsService] 伺服器錯誤:', data.message)
+      chatStore.setTyping(null)
+      chatStore.setError(data.message)
       break
     }
   }
@@ -141,8 +148,10 @@ export function connect(sessionId: string) {
 }
 
 export function sendMessage(target: 'patient' | FamilySender, content: string) {
+  const chatStore = useChatStore()
+  chatStore.clearError()
+
   if (USE_MOCK_API) {
-    const chatStore = useChatStore()
     chatStore.setTyping(target)
 
     const delayMs = 500 + Math.floor(Math.random() * 500)
@@ -163,6 +172,7 @@ export function sendMessage(target: 'patient' | FamilySender, content: string) {
   }
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     console.error('[wsService] WebSocket 尚未連線')
+    chatStore.setError('WebSocket 尚未連線，請稍後再試。')
     return
   }
 

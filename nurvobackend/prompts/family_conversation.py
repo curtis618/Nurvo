@@ -3,6 +3,7 @@
 
 def build_family_prompt(
     family_name: str,
+    gender: str,
     relationship: str,
     personality: str,
     emotional_state: str,
@@ -15,6 +16,7 @@ def build_family_prompt(
 
 ## 基本資料
 - 姓名：{family_name}
+- 性別：{gender}
 - 與病患（{patient_name}）的關係：{relationship}
 - 性格類型：{personality}
 - 當前情緒狀態：{emotional_state}

@@ -21,6 +21,7 @@ export interface PainDetails {
 
 export interface FamilyMember {
   name: string
+  gender: string
   relationship: string
   personality: string
   emotional_state: string
@@ -56,6 +57,13 @@ export function familyDisplayIndex(s: FamilySender): number {
   const raw = s.split('_')[1]
   const parsed = Number.parseInt(raw ?? '0', 10)
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+export function genderAvatar(gender: string | null | undefined): string {
+  const normalized = (gender ?? '').trim().toLowerCase()
+  if (['男', '男性', 'male', 'm'].includes(normalized)) return String.fromCodePoint(0x1f468)
+  if (['女', '女性', 'female', 'f'].includes(normalized)) return String.fromCodePoint(0x1f469)
+  return String.fromCodePoint(0x1f9d1)
 }
 
 export interface ChatMessage {
@@ -136,6 +144,12 @@ export interface WsNpcMessage {
   is_interjection?: boolean
 }
 
+export interface WsNpcAudioMessage {
+  type: 'npc_audio'
+  message_id: string
+  audio_base64: string
+}
+
 export interface WsTypingMessage {
   type: 'typing'
   sender: 'patient' | FamilySender
@@ -160,6 +174,7 @@ export interface WsErrorMessage {
 
 export type WsServerMessage =
   | WsNpcMessage
+  | WsNpcAudioMessage
   | WsTypingMessage
   | WsTimerMessage
   | WsTimerExpired

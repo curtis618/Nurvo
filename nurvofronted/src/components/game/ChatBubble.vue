@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ChatMessage } from '@/types/game'
-import { isFamilySender, familyDisplayIndex } from '@/types/game'
+import { isFamilySender, familyDisplayIndex, genderAvatar } from '@/types/game'
 import { decodeAndPlay } from '@/services/audioService'
 import { useScenarioStore } from '@/stores/scenarioStore'
 
@@ -29,6 +29,16 @@ const senderClass = computed(() => {
   return props.message.sender
 })
 
+const senderAvatar = computed(() => {
+  if (props.message.sender === 'nurse') return 'N'
+  if (props.message.sender === 'patient') return String.fromCodePoint(0x1f9d3)
+  if (isFamilySender(props.message.sender)) {
+    const idx = familyDisplayIndex(props.message.sender)
+    return genderAvatar(scenarioStore.scenario?.family_members[idx]?.gender)
+  }
+  return ''
+})
+
 const formattedTime = computed(() => {
   const totalSeconds = props.message.elapsed_seconds
   const minutes = Math.floor(totalSeconds / 60)
@@ -50,9 +60,7 @@ function replayAudio() {
       class="bubble-avatar"
       :class="`bubble-avatar--${senderClass}`"
     >
-      <template v-if="isNurse">N</template>
-      <template v-else-if="message.sender === 'patient'">&#x1F9D3;</template>
-      <template v-else>&#x1F469;</template>
+      {{ senderAvatar }}
     </div>
 
     <!-- Content -->

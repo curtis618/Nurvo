@@ -7,7 +7,7 @@ import { useScenarioStore } from '@/stores/scenarioStore'
 import { sendMessage } from '@/services/wsService'
 import { decodeAndPlay, unlock as unlockAudio } from '@/services/audioService'
 import * as speechService from '@/services/speechService'
-import { isFamilySender, familyDisplayIndex } from '@/types/game'
+import { isFamilySender, familyDisplayIndex, genderAvatar } from '@/types/game'
 import type { FamilySender } from '@/types/game'
 import ChatBubble from './ChatBubble.vue'
 
@@ -23,6 +23,8 @@ const messagesContainer = ref<HTMLElement | null>(null)
 const isRecording = ref<boolean>(false)
 const isTranscribing = ref<boolean>(false)
 const speechSupported: boolean = speechService.isSupported()
+const playedAudioMessageIds = new Set<string>()
+const patientAvatar = String.fromCodePoint(0x1f9d3)
 
 const filteredMessages = computed(() => {
   return chatStore.messages
@@ -47,6 +49,16 @@ const placeholder = computed<string>(() => {
     return `輸入訊息給${name}...`
   }
   return '輸入訊息...'
+})
+
+const typingAvatar = computed<string>(() => {
+  const indicator = chatStore.typingIndicator
+  if (indicator === 'patient') return patientAvatar
+  if (indicator && isFamilySender(indicator)) {
+    const idx = familyDisplayIndex(indicator)
+    return genderAvatar(familyMembers.value[idx]?.gender)
+  }
+  return ''
 })
 
 const disabled = computed<boolean>(() => {
@@ -91,6 +103,22 @@ function scrollToBottom(): void {
   }
 }
 
+function playPendingAudio(): void {
+  const currentMessageIds = new Set(chatStore.messages.map((message) => message.id))
+  playedAudioMessageIds.forEach((messageId) => {
+    if (!currentMessageIds.has(messageId)) {
+      playedAudioMessageIds.delete(messageId)
+    }
+  })
+
+  for (const message of chatStore.messages) {
+    if (message.sender !== 'nurse' && message.audio_base64 && !playedAudioMessageIds.has(message.id)) {
+      playedAudioMessageIds.add(message.id)
+      decodeAndPlay(message.audio_base64)
+    }
+  }
+}
+
 async function toggleRecording(): Promise<void> {
   if (isRecording.value) {
     speechService.stop()
@@ -111,17 +139,12 @@ async function toggleRecording(): Promise<void> {
   }
 }
 
-// Auto-play audio when new NPC message arrives with audio
+// Auto-play audio when new NPC audio arrives, including async TTS updates.
 watch(
-  () => chatStore.messages.length,
-  (_newLen: number, oldLen: number | undefined) => {
-    nextTick(() => {
-      scrollToBottom()
-      const latest = chatStore.messages[chatStore.messages.length - 1]
-      if (latest && latest.sender !== 'nurse' && latest.audio_base64) {
-        decodeAndPlay(latest.audio_base64)
-      }
-    })
+  () => chatStore.messages.map((message) => `${message.id}:${message.audio_base64 ? '1' : '0'}`).join('|'),
+  () => {
+    playPendingAudio()
+    nextTick(scrollToBottom)
   },
 )
 </script>
@@ -144,7 +167,7 @@ watch(
         :class="{ 'tab-btn--active': chatStore.currentTarget === `family_${idx}` }"
         @click="switchTarget(`family_${idx}` as FamilySender)"
       >
-        &#x1F469; {{ fm.name }}
+        {{ genderAvatar(fm.gender) }} {{ fm.name }}
       </button>
     </div>
 
@@ -157,13 +180,17 @@ watch(
 
       <ChatBubble v-for="msg in filteredMessages" :key="msg.id" :message="msg" />
 
+      <div v-if="chatStore.errorMessage" class="chat-error">
+        {{ chatStore.errorMessage }}
+      </div>
+
       <!-- Typing indicator -->
       <div v-if="chatStore.typingIndicator" class="typing-row">
         <div
           class="bubble-avatar"
           :class="chatStore.typingIndicator === 'patient' ? 'bubble-avatar--patient' : 'bubble-avatar--family'"
         >
-          {{ chatStore.typingIndicator === 'patient' ? '&#x1F9D3;' : '&#x1F469;' }}
+          {{ typingAvatar }}
         </div>
         <span class="typing-label">{{ typingLabel }}</span>
         <div class="typing-bubble">
@@ -292,6 +319,18 @@ watch(
 .empty-hint {
   font-size: 14px !important;
   opacity: 0.9;
+}
+
+.chat-error {
+  margin: 8px 0 12px;
+  border: 1px solid rgba(252, 165, 165, 0.8);
+  border-radius: 10px;
+  background: rgba(254, 242, 242, 0.95);
+  color: #991b1b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  padding: 9px 12px;
 }
 
 /* Typing indicator */

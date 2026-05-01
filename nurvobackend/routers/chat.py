@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from config import GAME_TIME_LIMIT
-from models.chat import ChatMessage, SessionStatus
-from services.conversation_engine import get_npc_response, maybe_family_interjection
+from models.chat import ChatMessage, GameSession, SessionStatus
+from services.conversation_engine import get_npc_audio, get_npc_response, maybe_family_interjection
 from session_store import get_session, update_session
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,30 @@ def _elapsed_seconds(start_time: datetime) -> float:
 async def _send_json(ws: WebSocket, data: dict) -> None:
     """Send a JSON message over the WebSocket."""
     await ws.send_text(json.dumps(data, ensure_ascii=False))
+
+
+async def _send_audio_when_ready(
+    ws: WebSocket,
+    session: GameSession,
+    message_id: str,
+    sender: str,
+    content: str,
+) -> None:
+    """Generate TTS in the background and attach it to an existing message."""
+    try:
+        audio_base64 = await get_npc_audio(session, content, sender)
+        if audio_base64:
+            await _send_json(ws, {
+                "type": "npc_audio",
+                "message_id": message_id,
+                "audio_base64": audio_base64,
+            })
+    except Exception:
+        logger.exception(
+            "NPC audio generation failed session_id=%s message_id=%s",
+            session.session_id,
+            message_id,
+        )
 
 
 def _ws_error(message: str) -> dict:
@@ -54,6 +78,12 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
     })
 
     timer = asyncio.create_task(_timer_task(ws, session_id, session.start_time))
+    audio_tasks: set[asyncio.Task[None]] = set()
+
+    def schedule_audio(session: GameSession, message_id: str, sender: str, content: str) -> None:
+        task = asyncio.create_task(_send_audio_when_ready(ws, session, message_id, sender, content))
+        audio_tasks.add(task)
+        task.add_done_callback(audio_tasks.discard)
 
     try:
         while True:
@@ -108,7 +138,7 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
             await _send_json(ws, {"type": "typing", "sender": target})
 
             try:
-                npc_text, sender, audio_base64 = await get_npc_response(session, content, target)
+                npc_text, sender = await get_npc_response(session, content, target)
             except Exception:
                 logger.exception("NPC response failed session_id=%s", session_id)
                 await _send_json(
@@ -137,13 +167,12 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
                 "message_id": npc_msg_id,
                 "elapsed_seconds": elapsed,
             }
-            if audio_base64:
-                npc_payload["audio_base64"] = audio_base64
 
             await _send_json(ws, npc_payload)
+            schedule_audio(session, npc_msg_id, sender, npc_text)
 
             if target == "patient":
-                interjection_text, did_interject, interjection_audio, family_index = await maybe_family_interjection(session)
+                interjection_text, did_interject, family_index = await maybe_family_interjection(session)
 
                 if did_interject:
                     family_sender = f"family_{family_index}"
@@ -172,10 +201,9 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
                         "elapsed_seconds": elapsed,
                         "is_interjection": True,
                     }
-                    if interjection_audio:
-                        interjection_payload["audio_base64"] = interjection_audio
 
                     await _send_json(ws, interjection_payload)
+                    schedule_audio(session, interjection_id, family_sender, interjection_text)
 
     except WebSocketDisconnect:
         pass
@@ -190,6 +218,8 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
             pass
     finally:
         timer.cancel()
+        for task in audio_tasks:
+            task.cancel()
 
 
 async def _timer_task(ws: WebSocket, session_id: str, start_time: datetime) -> None:
