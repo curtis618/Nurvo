@@ -28,6 +28,8 @@ services:
       - SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.h2.Driver
       - SPRING_DATASOURCE_USERNAME=sa
       - SPRING_DATASOURCE_PASSWORD=${DIGIRUNNER_DB_PASSWORD:-}
+      # The bundled schema.sql replays on startup; persisted H2 already has seed rows after the first boot.
+      - SPRING_SQL_INIT_CONTINUE_ON_ERROR=true
     depends_on:
       - backend
     restart: unless-stopped
