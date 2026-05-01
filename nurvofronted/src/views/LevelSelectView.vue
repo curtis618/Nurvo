@@ -55,9 +55,13 @@ async function generateAndContinue() {
     gameStore.reset()
     scenarioStore.reset()
     await scenarioStore.fetchScenario(selectedDifficulty.value) // 傳入選擇的難度參數(目前還沒有實際傳入後端，但前端已經準備好)
-    router.push('/briefing')
+    await router.push({ name: 'briefing' })
   } catch (error: any) {
-    errorMsg.value = error.message || '教案生成失敗，請稍後再試'
+    if (scenarioStore.scenario && gameStore.sessionId) {
+      errorMsg.value = '教案已生成，但無法進入任務簡報，請重新整理後再試'
+    } else {
+      errorMsg.value = error.message || '教案生成失敗，請稍後再試'
+    }
   } finally {
     loading.value = false
   }

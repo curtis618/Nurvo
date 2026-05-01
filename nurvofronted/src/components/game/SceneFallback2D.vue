@@ -79,11 +79,7 @@ const resolvedTopBubbles = computed<TopBubbleItem[]>(() => {
   return bubbles
 })
 
-const truncatedContent = computed<string>(() => {
-  if (!props.latestMessage) return ''
-  const content: string = props.latestMessage.content
-  return content.length > 60 ? content.slice(0, 60) + '...' : content
-})
+const dialogContent = computed<string>(() => props.latestMessage?.content ?? '')
 
 const familyPositions = ['8%', '20%', '32%']
 </script>
@@ -163,7 +159,7 @@ const familyPositions = ['8%', '20%', '32%']
         :class="{ 'bottom-dialog--family': isFamilySpeaker }"
       >
         <span class="bottom-dialog__speaker">{{ dialogSpeakerName }}</span>
-        <p class="bottom-dialog__content">{{ truncatedContent }}</p>
+        <p class="bottom-dialog__content">{{ dialogContent }}</p>
       </div>
     </div>
   </div>
@@ -424,6 +420,8 @@ const familyPositions = ['8%', '20%', '32%']
   bottom: 16px;
   transform: translateX(-50%);
   width: min(760px, calc(100% - 32px));
+  max-height: min(34%, 220px);
+  overflow-y: auto;
   border-radius: 14px;
   border: 1px solid rgba(147, 197, 253, 0.8);
   background: rgba(239, 246, 255, 0.95);
@@ -458,6 +456,8 @@ const familyPositions = ['8%', '20%', '32%']
   font-size: 14px;
   font-weight: 600;
   line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .character-label {
