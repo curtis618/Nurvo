@@ -4,18 +4,41 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from config import GAME_TIME_LIMIT
+from config import (
+    GAME_TIME_LIMIT,
+    PROACTIVE_ENABLED,
+    PROACTIVE_IDLE_THRESHOLDS,
+    RECONNECT_GRACE_SECONDS,
+)
 from models.chat import ChatMessage, GameSession, SessionStatus
-from services.conversation_engine import get_npc_audio, get_npc_response, maybe_family_interjection
+from services.conversation_engine import (
+    get_npc_audio,
+    get_npc_response,
+    maybe_family_interjection,
+    maybe_proactive_speak,
+)
 from session_store import get_session, update_session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+_session_locks: dict[str, asyncio.Lock] = {}
+_VALID_ACTIVITY_KINDS = {"typing_start", "typing_end", "audio_start", "audio_end", "connection_resumed"}
+
+
+def _get_session_lock(session_id: str) -> asyncio.Lock:
+    """Get or create the asyncio lock for a given session."""
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[session_id] = lock
+    return lock
 
 
 def _elapsed_seconds(start_time: datetime) -> float:
@@ -57,18 +80,146 @@ def _ws_error(message: str) -> dict:
     return {"type": "error", "message": message, "retryable": False}
 
 
+def _threshold_for_streak(streak: int) -> int:
+    """Pick the idle threshold for the given streak, saturating at the last value."""
+    thresholds = PROACTIVE_IDLE_THRESHOLDS or [25, 20, 15]
+    idx = min(streak, len(thresholds) - 1)
+    return thresholds[idx]
+
+
+def _apply_activity(session: GameSession, kind: str) -> None:
+    """Mutate session state based on a client-side activity signal."""
+    now = datetime.now(timezone.utc)
+    if kind in ("typing_start", "audio_start"):
+        session.is_user_active = True
+    elif kind in ("typing_end", "audio_end"):
+        session.is_user_active = False
+        session.last_activity_at = now
+    elif kind == "connection_resumed":
+        session.is_user_active = False
+        session.last_activity_at = now + timedelta(seconds=RECONNECT_GRACE_SECONDS)
+
+
+async def _idle_monitor_task(
+    ws: WebSocket,
+    session_id: str,
+    lock: asyncio.Lock,
+    schedule_audio: Callable[[GameSession, str, str, str], None],
+) -> None:
+    """Background task that triggers proactive NPC speech after nurse idleness."""
+    if not PROACTIVE_ENABLED:
+        return
+
+    try:
+        while True:
+            await asyncio.sleep(1)
+
+            session = get_session(session_id)
+            if session is None or session.start_time is None:
+                continue
+            if session.is_user_active or session.last_activity_at is None:
+                continue
+
+            now = datetime.now(timezone.utc)
+            idle_seconds = (now - session.last_activity_at).total_seconds()
+            if idle_seconds < 0:
+                continue
+
+            threshold = _threshold_for_streak(session.proactive_streak)
+            if idle_seconds < threshold:
+                continue
+
+            async with lock:
+                session = get_session(session_id)
+                if session is None or session.start_time is None:
+                    continue
+                if session.is_user_active or session.last_activity_at is None:
+                    continue
+
+                now = datetime.now(timezone.utc)
+                idle_seconds = (now - session.last_activity_at).total_seconds()
+                threshold = _threshold_for_streak(session.proactive_streak)
+                if idle_seconds < threshold:
+                    continue
+
+                content, sender, did_speak = await maybe_proactive_speak(session)
+                if not did_speak:
+                    session.last_activity_at = datetime.now(timezone.utc) - timedelta(seconds=threshold - 5)
+                    update_session(session)
+                    continue
+
+                elapsed = _elapsed_seconds(session.start_time)
+                msg_id = str(uuid.uuid4())
+                message = ChatMessage(
+                    id=msg_id,
+                    sender=sender,
+                    content=content,
+                    timestamp=datetime.now(timezone.utc),
+                    elapsed_seconds=elapsed,
+                    is_proactive=True,
+                )
+                session.conversation_history.append(message)
+                session.last_activity_at = datetime.now(timezone.utc)
+                update_session(session)
+
+                await _send_json(ws, {"type": "typing", "sender": sender})
+                await _send_json(ws, {
+                    "type": "npc_message",
+                    "sender": sender,
+                    "content": content,
+                    "message_id": msg_id,
+                    "elapsed_seconds": elapsed,
+                    "is_proactive": True,
+                })
+                schedule_audio(session, msg_id, sender, content)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("idle_monitor ended unexpectedly: %s", exc)
+
+
+async def _timer_task(ws: WebSocket, session_id: str, start_time: datetime) -> None:
+    """Background task that sends timer updates every 30 seconds and expires the session."""
+    try:
+        while True:
+            await asyncio.sleep(30)
+            elapsed = _elapsed_seconds(start_time)
+            remaining = max(0, GAME_TIME_LIMIT - int(elapsed))
+
+            if remaining <= 0:
+                await _send_json(ws, {
+                    "type": "timer_expired",
+                    "message": "時間已到，請前往記錄頁面提交護理記錄。",
+                })
+                await ws.close()
+                return
+
+            await _send_json(ws, {
+                "type": "timer_update",
+                "remaining_seconds": remaining,
+            })
+    except Exception:
+        # Connection closed or other error; just stop the timer.
+        pass
+
+
 async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
-    """Shared chat loop after session_id is known (path-based or digiRunner /ws)."""
+    """Shared chat loop after session_id is known, for path-based or digiRunner flows."""
     session = get_session(session_id)
     if session is None:
         await _send_json(ws, _ws_error("Session not found"))
         await ws.close()
         return
 
+    lock = _get_session_lock(session_id)
+
     if session.start_time is None:
         session.start_time = datetime.now(timezone.utc)
         session.status = SessionStatus.PLAYING
-        update_session(session)
+
+    session.last_activity_at = datetime.now(timezone.utc) + timedelta(seconds=RECONNECT_GRACE_SECONDS)
+    session.is_user_active = False
+    update_session(session)
 
     initial_elapsed = _elapsed_seconds(session.start_time)
     initial_remaining = max(0, GAME_TIME_LIMIT - int(initial_elapsed))
@@ -85,6 +236,8 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
         audio_tasks.add(task)
         task.add_done_callback(audio_tasks.discard)
 
+    idle_monitor = asyncio.create_task(_idle_monitor_task(ws, session_id, lock, schedule_audio))
+
     try:
         while True:
             raw = await ws.receive_text()
@@ -96,6 +249,18 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
                 continue
 
             msg_type = data.get("type")
+
+            if msg_type == "activity":
+                kind = data.get("kind")
+                if kind not in _VALID_ACTIVITY_KINDS:
+                    await _send_json(ws, _ws_error(f"Unknown activity kind: {kind}"))
+                    continue
+                session = get_session(session_id)
+                if session is not None:
+                    _apply_activity(session, kind)
+                    update_session(session)
+                continue
+
             if msg_type != "nurse_message":
                 await _send_json(ws, _ws_error(f"Unknown message type: {msg_type}"))
                 continue
@@ -123,87 +288,94 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
                 await ws.close()
                 return
 
-            nurse_msg_id = str(uuid.uuid4())
-            nurse_chat = ChatMessage(
-                id=nurse_msg_id,
-                sender="nurse",
-                content=content,
-                timestamp=datetime.now(timezone.utc),
-                elapsed_seconds=elapsed,
-            )
-            session.conversation_history.append(nurse_chat)
-            session.current_target = target
-            update_session(session)
+            async with lock:
+                session = get_session(session_id)
+                if session is None:
+                    await _send_json(ws, _ws_error("Session expired"))
+                    await ws.close()
+                    return
 
-            await _send_json(ws, {"type": "typing", "sender": target})
-
-            try:
-                npc_text, sender = await get_npc_response(session, content, target)
-            except Exception:
-                logger.exception("NPC response failed session_id=%s", session_id)
-                await _send_json(
-                    ws,
-                    _ws_error("NPC 回應暫時無法產生，請稍後再試。"),
+                nurse_msg_id = str(uuid.uuid4())
+                nurse_chat = ChatMessage(
+                    id=nurse_msg_id,
+                    sender="nurse",
+                    content=content,
+                    timestamp=datetime.now(timezone.utc),
+                    elapsed_seconds=elapsed,
                 )
-                continue
+                session.conversation_history.append(nurse_chat)
+                session.current_target = target
+                session.proactive_streak = 0
+                session.is_user_active = False
+                session.last_activity_at = datetime.now(timezone.utc)
+                update_session(session)
 
-            elapsed = _elapsed_seconds(session.start_time)
-            npc_msg_id = str(uuid.uuid4())
+                await _send_json(ws, {"type": "typing", "sender": target})
 
-            npc_chat = ChatMessage(
-                id=npc_msg_id,
-                sender=sender,
-                content=npc_text,
-                timestamp=datetime.now(timezone.utc),
-                elapsed_seconds=elapsed,
-            )
-            session.conversation_history.append(npc_chat)
-            update_session(session)
-
-            npc_payload: dict = {
-                "type": "npc_message",
-                "sender": sender,
-                "content": npc_text,
-                "message_id": npc_msg_id,
-                "elapsed_seconds": elapsed,
-            }
-
-            await _send_json(ws, npc_payload)
-            schedule_audio(session, npc_msg_id, sender, npc_text)
-
-            if target == "patient":
-                interjection_text, did_interject, family_index = await maybe_family_interjection(session)
-
-                if did_interject:
-                    family_sender = f"family_{family_index}"
-
-                    elapsed = _elapsed_seconds(session.start_time)
-                    interjection_id = str(uuid.uuid4())
-
-                    interjection_chat = ChatMessage(
-                        id=interjection_id,
-                        sender=family_sender,
-                        content=interjection_text,
-                        timestamp=datetime.now(timezone.utc),
-                        elapsed_seconds=elapsed,
-                        is_interjection=True,
+                try:
+                    npc_text, sender = await get_npc_response(session, content, target)
+                except Exception:
+                    logger.exception("NPC response failed session_id=%s", session_id)
+                    await _send_json(
+                        ws,
+                        _ws_error("NPC 回應暫時無法產生，請稍後再試。"),
                     )
-                    session.conversation_history.append(interjection_chat)
-                    update_session(session)
+                    continue
 
-                    await _send_json(ws, {"type": "typing", "sender": family_sender})
+                elapsed = _elapsed_seconds(session.start_time)
+                npc_msg_id = str(uuid.uuid4())
 
-                    interjection_payload: dict = {
-                        "type": "npc_message",
-                        "sender": family_sender,
-                        "content": interjection_text,
-                        "message_id": interjection_id,
-                        "elapsed_seconds": elapsed,
-                        "is_interjection": True,
-                    }
+                npc_chat = ChatMessage(
+                    id=npc_msg_id,
+                    sender=sender,
+                    content=npc_text,
+                    timestamp=datetime.now(timezone.utc),
+                    elapsed_seconds=elapsed,
+                )
+                session.conversation_history.append(npc_chat)
+                session.last_activity_at = datetime.now(timezone.utc)
+                update_session(session)
 
-                    await _send_json(ws, interjection_payload)
-                    schedule_audio(session, interjection_id, family_sender, interjection_text)
+                await _send_json(ws, {
+                    "type": "npc_message",
+                    "sender": sender,
+                    "content": npc_text,
+                    "message_id": npc_msg_id,
+                    "elapsed_seconds": elapsed,
+                })
+                schedule_audio(session, npc_msg_id, sender, npc_text)
+
+                if target == "patient":
+                    interjection_text, did_interject, family_index = await maybe_family_interjection(session)
+
+                    if did_interject:
+                        family_sender = f"family_{family_index}"
+
+                        elapsed = _elapsed_seconds(session.start_time)
+                        interjection_id = str(uuid.uuid4())
+
+                        interjection_chat = ChatMessage(
+                            id=interjection_id,
+                            sender=family_sender,
+                            content=interjection_text,
+                            timestamp=datetime.now(timezone.utc),
+                            elapsed_seconds=elapsed,
+                            is_interjection=True,
+                        )
+                        session.conversation_history.append(interjection_chat)
+                        session.last_activity_at = datetime.now(timezone.utc)
+                        update_session(session)
+
+                        await _send_json(ws, {"type": "typing", "sender": family_sender})
+                        await _send_json(ws, {
+                            "type": "npc_message",
+                            "sender": family_sender,
+                            "content": interjection_text,
+                            "message_id": interjection_id,
+                            "elapsed_seconds": elapsed,
+                            "is_interjection": True,
+                        })
+                        schedule_audio(session, interjection_id, family_sender, interjection_text)
 
     except WebSocketDisconnect:
         pass
@@ -218,38 +390,15 @@ async def _run_chat_session(ws: WebSocket, session_id: str) -> None:
             pass
     finally:
         timer.cancel()
+        idle_monitor.cancel()
         for task in audio_tasks:
             task.cancel()
-
-
-async def _timer_task(ws: WebSocket, session_id: str, start_time: datetime) -> None:
-    """Background task that sends timer updates every 30 seconds and expires the session."""
-    try:
-        while True:
-            await asyncio.sleep(30)
-            elapsed = _elapsed_seconds(start_time)
-            remaining = max(0, GAME_TIME_LIMIT - int(elapsed))
-
-            if remaining <= 0:
-                await _send_json(ws, {
-                    "type": "timer_expired",
-                    "message": "時間已到，請前往記錄頁面提交護理記錄。",
-                })
-                await ws.close()
-                return
-
-            await _send_json(ws, {
-                "type": "timer_update",
-                "remaining_seconds": remaining,
-            })
-    except Exception:
-        # Connection closed or other error – just stop the timer
-        pass
+        _session_locks.pop(session_id, None)
 
 
 @router.websocket("/ws")
 async def chat_websocket_digirunner(ws: WebSocket) -> None:
-    """Fixed path for digiRunner WebSocket Proxy (target ws://backend:8000/api/chat/ws).
+    """Fixed path for digiRunner WebSocket Proxy.
 
     digiRunner exposes clients at ws://gateway/website/{siteName} and opens one backend URI per
     client; session_id must be sent as the first frame: {"type":"session_join","session_id":"..."}.
@@ -279,6 +428,6 @@ async def chat_websocket_digirunner(ws: WebSocket) -> None:
 
 @router.websocket("/{session_id}")
 async def chat_websocket(ws: WebSocket, session_id: str) -> None:
-    """WebSocket: /api/chat/{session_id} (direct to FastAPI, optional)."""
+    """WebSocket: /api/chat/{session_id} direct to FastAPI."""
     await ws.accept()
     await _run_chat_session(ws, session_id)

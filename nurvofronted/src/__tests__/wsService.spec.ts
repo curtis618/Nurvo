@@ -54,6 +54,7 @@ describe('wsService', () => {
 
     expect(socket.sent).toEqual([
       JSON.stringify({ type: 'session_join', session_id: 'session-123' }),
+      JSON.stringify({ type: 'activity', kind: 'connection_resumed' }),
     ])
 
     disconnect()

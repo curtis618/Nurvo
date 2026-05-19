@@ -11,6 +11,40 @@ let isPlaying = false
 let unlocked = false
 const queue: string[] = []
 
+type PlaybackListener = () => void
+const startListeners = new Set<PlaybackListener>()
+const endListeners = new Set<PlaybackListener>()
+
+export function onPlaybackStart(cb: PlaybackListener): () => void {
+  startListeners.add(cb)
+  return () => startListeners.delete(cb)
+}
+
+export function onPlaybackEnd(cb: PlaybackListener): () => void {
+  endListeners.add(cb)
+  return () => endListeners.delete(cb)
+}
+
+function emitStart(): void {
+  for (const cb of startListeners) {
+    try {
+      cb()
+    } catch (err) {
+      console.error('[audioService] start listener error:', err)
+    }
+  }
+}
+
+function emitEnd(): void {
+  for (const cb of endListeners) {
+    try {
+      cb()
+    } catch (err) {
+      console.error('[audioService] end listener error:', err)
+    }
+  }
+}
+
 function getAudioContext(): AudioContext {
   if (!audioContext) {
     audioContext = new AudioContext()
@@ -75,15 +109,20 @@ async function processQueue(): Promise<void> {
   if (isPlaying) return
 
   isPlaying = true
-  while (queue.length > 0) {
-    const next = queue.shift()!
-    try {
-      await playBuffer(next)
-    } catch (err) {
-      console.error('[audioService] 播放音訊失敗:', err)
+  emitStart()
+  try {
+    while (queue.length > 0) {
+      const next = queue.shift()!
+      try {
+        await playBuffer(next)
+      } catch (err) {
+        console.error('[audioService] 播放音訊失敗:', err)
+      }
     }
+  } finally {
+    isPlaying = false
+    emitEnd()
   }
-  isPlaying = false
 }
 
 /**
@@ -110,5 +149,8 @@ export function stop(): void {
     }
     currentSource = null
   }
-  isPlaying = false
+  if (isPlaying) {
+    isPlaying = false
+    emitEnd()
+  }
 }

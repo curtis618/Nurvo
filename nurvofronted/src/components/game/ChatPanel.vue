@@ -1,15 +1,46 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '@/stores/chatStore'
 import { useGameStore } from '@/stores/gameStore'
 import { useScenarioStore } from '@/stores/scenarioStore'
-import { sendMessage } from '@/services/wsService'
-import { decodeAndPlay, unlock as unlockAudio } from '@/services/audioService'
+import { sendMessage, sendActivity } from '@/services/wsService'
+import {
+  decodeAndPlay,
+  unlock as unlockAudio,
+  onPlaybackStart,
+  onPlaybackEnd,
+} from '@/services/audioService'
 import * as speechService from '@/services/speechService'
 import { isFamilySender, familyDisplayIndex, genderAvatar } from '@/types/game'
 import type { FamilySender } from '@/types/game'
 import ChatBubble from './ChatBubble.vue'
+
+const TYPING_DEBOUNCE_MS = 1000
+let typingEndTimer: ReturnType<typeof setTimeout> | null = null
+let typingActive = false
+let offPlaybackStart: (() => void) | null = null
+let offPlaybackEnd: (() => void) | null = null
+
+function markTypingEnd(): void {
+  if (typingEndTimer) {
+    clearTimeout(typingEndTimer)
+    typingEndTimer = null
+  }
+  if (typingActive) {
+    typingActive = false
+    sendActivity('typing_end')
+  }
+}
+
+function markTypingStart(): void {
+  if (!typingActive) {
+    typingActive = true
+    sendActivity('typing_start')
+  }
+  if (typingEndTimer) clearTimeout(typingEndTimer)
+  typingEndTimer = setTimeout(markTypingEnd, TYPING_DEBOUNCE_MS)
+}
 
 const router = useRouter()
 const chatStore = useChatStore()
@@ -86,6 +117,7 @@ function handleSend(): void {
   })
 
   inputText.value = ''
+  markTypingEnd()
 }
 
 function handleEnterKey(event: KeyboardEvent): void {
@@ -156,6 +188,28 @@ watch(
     nextTick(scrollToBottom)
   },
 )
+
+// Track typing state to pause backend idle detection while composing a message.
+watch(inputText, (value: string) => {
+  if (value.trim().length > 0) {
+    markTypingStart()
+  } else {
+    markTypingEnd()
+  }
+})
+
+onMounted(() => {
+  offPlaybackStart = onPlaybackStart(() => sendActivity('audio_start'))
+  offPlaybackEnd = onPlaybackEnd(() => sendActivity('audio_end'))
+})
+
+onBeforeUnmount(() => {
+  markTypingEnd()
+  if (offPlaybackStart) offPlaybackStart()
+  if (offPlaybackEnd) offPlaybackEnd()
+  offPlaybackStart = null
+  offPlaybackEnd = null
+})
 </script>
 
 <template>

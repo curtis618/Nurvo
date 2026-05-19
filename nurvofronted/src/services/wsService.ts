@@ -1,5 +1,12 @@
 import { useChatStore } from '@/stores/chatStore'
-import type { WsServerMessage, WsNurseMessage, ChatMessage, FamilySender } from '@/types/game'
+import type {
+  WsServerMessage,
+  WsNurseMessage,
+  WsActivityMessage,
+  WsActivityKind,
+  ChatMessage,
+  FamilySender,
+} from '@/types/game'
 import { isFamilySender } from '@/types/game'
 
 let ws: WebSocket | null = null
@@ -68,6 +75,7 @@ function handleMessage(event: MessageEvent) {
         timestamp: new Date().toISOString(),
         elapsed_seconds: data.elapsed_seconds,
         is_interjection: data.is_interjection ?? false,
+        is_proactive: data.is_proactive ?? false,
         audio_base64: data.audio_base64,
       }
       chatStore.setTyping(null)
@@ -127,6 +135,7 @@ export function connect(sessionId: string) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+    sendActivity('connection_resumed')
   }
 
   ws.onmessage = handleMessage
@@ -145,6 +154,14 @@ export function connect(sessionId: string) {
   ws.onerror = (error) => {
     console.error('[wsService] WebSocket 錯誤:', error)
   }
+}
+
+export function sendActivity(kind: WsActivityKind): void {
+  if (USE_MOCK_API) return
+  if (!ws || ws.readyState !== WebSocket.OPEN) return
+
+  const payload: WsActivityMessage = { type: 'activity', kind }
+  ws.send(JSON.stringify(payload))
 }
 
 export function sendMessage(target: 'patient' | FamilySender, content: string) {

@@ -16,11 +16,14 @@ vi.mock('vue-router', () => ({
 
 vi.mock('@/services/wsService', () => ({
   sendMessage: vi.fn(),
+  sendActivity: vi.fn(),
 }))
 
 vi.mock('@/services/audioService', () => ({
   decodeAndPlay: vi.fn(),
   unlock: vi.fn(),
+  onPlaybackStart: vi.fn(() => vi.fn()),
+  onPlaybackEnd: vi.fn(() => vi.fn()),
 }))
 
 vi.mock('@/services/speechService', () => ({

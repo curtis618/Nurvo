@@ -21,6 +21,7 @@ class ChatMessage(BaseModel):
     timestamp: datetime
     elapsed_seconds: float
     is_interjection: bool = False
+    is_proactive: bool = False
 
 
 class GameSession(BaseModel):
@@ -33,3 +34,7 @@ class GameSession(BaseModel):
     patient_system_prompt: str = ""
     family_system_prompts: list[str] = []
     last_interjecting_family_index: int = -1
+    last_activity_at: datetime | None = None
+    is_user_active: bool = False
+    proactive_streak: int = 0
+    last_proactive_at: datetime | None = None

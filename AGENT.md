@@ -58,3 +58,17 @@ You are acting as an expert Full Stack Developer specializing in **Vue 3**, **Ty
 - **NEVER** output real API keys or secrets in code blocks.
 - **ALWAYS** suggest using `.env` files for sensitive data.
 - **ALWAYS** check `.gitignore` before creating new large files or directories that shouldn't be committed.
+
+## 8. WebSocket Chat Protocol
+- Primary browser endpoint: `ws://host/website/{siteName}` through digiRunner.
+- Backend target for digiRunner: `ws://backend:8000/api/chat/ws`; the first client frame must be `{ type: "session_join", session_id: "..." }`.
+- Optional FastAPI debug endpoint: `ws://host/api/chat/{session_id}`.
+- **Client → Server**：
+    - `{ type: "session_join", session_id: "..." }`：only for the digiRunner `/api/chat/ws` backend target, and it must be the first frame.
+    - `{ type: "nurse_message", target: "patient"|"family_0"|"family_1"|"family_2", content: "..." }`
+    - `{ type: "activity", kind: "typing_start"|"typing_end"|"audio_start"|"audio_end"|"connection_resumed" }`：通知後端使用者活動狀態，暫停或恢復閒置偵測。
+- **Server → Client**：
+    - `{ type: "npc_message", sender, content, message_id, elapsed_seconds, is_interjection?, is_proactive? }`
+    - `{ type: "npc_audio", message_id, audio_base64 }`：音訊後補，前端用 `message_id` 掛回既有訊息。
+    - `{ type: "typing", sender }`、`{ type: "timer_update"|"timer_expired", ... }`、`{ type: "error", message, retryable }`
+- 後端會在使用者閒置超過 `PROACTIVE_IDLE_THRESHOLDS[streak]` 秒時主動推送 NPC 訊息（`is_proactive: true`）；使用者送出 `nurse_message` 會將 streak 重置為 0（影響下次門檻與強度），無總次數上限。

@@ -55,6 +55,15 @@ flowchart TB
    ELEVENLABS_FAMILY_2_MALE_VOICE_ID=...
    ELEVENLABS_FAMILY_2_FEMALE_VOICE_ID=...
    ```
+
+   可選的主動發話設定（預設即可運作）：
+   ```env
+   PROACTIVE_ENABLED=true
+   PROACTIVE_IDLE_THRESHOLDS=25,20,15
+   PROACTIVE_COOLDOWN_SECONDS=10
+   PROACTIVE_ENDGAME_GUARD_SECONDS=30
+   RECONNECT_GRACE_SECONDS=10
+   ```
    可選：在專案根目錄或與 `infra` 同層建立 `.env`，設定 `DIGIRUNNER_DB_PASSWORD`（H2 資料庫密碼；未設則為空，行為同舊版）。
 
 2. 於專案根目錄執行以下指令啟動所有服務：

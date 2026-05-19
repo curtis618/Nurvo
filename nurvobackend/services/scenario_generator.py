@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import HTTPException
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from config import (
     DALLE_MODEL,
@@ -19,6 +20,8 @@ from config import (
 )
 from models.scenario import Scenario
 from prompts.scenario_generation import TIME_LIMIT_BY_DIFFICULTY, build_scenario_generation_prompt
+
+_MAX_SCENARIO_ATTEMPTS = 2
 
 
 _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -48,8 +51,8 @@ def _norm_difficulty(difficulty: str) -> str:
     return "medium"
 
 
-async def _generate_scenario_text(difficulty: str) -> Scenario:
-    """Generate scenario text via GPT-4o and parse it into a Scenario model."""
+async def _call_openai_for_scenario(difficulty: str) -> Scenario:
+    """Issue a single GPT-4o call and parse it into a Scenario model."""
     d = _norm_difficulty(difficulty)
     response = await _client.chat.completions.create(
         model=OPENAI_MODEL,
@@ -83,6 +86,28 @@ async def _generate_scenario_text(difficulty: str) -> Scenario:
     scenario = Scenario(**scenario_data)
     return scenario.model_copy(
         update={"time_limit_seconds": TIME_LIMIT_BY_DIFFICULTY[d]},
+    )
+
+
+async def _generate_scenario_text(difficulty: str) -> Scenario:
+    """Generate scenario text with one retry on Pydantic validation failure."""
+    last_validation_error: ValidationError | None = None
+
+    for attempt in range(1, _MAX_SCENARIO_ATTEMPTS + 1):
+        try:
+            return await _call_openai_for_scenario(difficulty)
+        except ValidationError as exc:
+            last_validation_error = exc
+            _logger.warning(
+                "Scenario validation failed on attempt %d/%d: %s",
+                attempt,
+                _MAX_SCENARIO_ATTEMPTS,
+                exc.errors(),
+            )
+
+    raise HTTPException(
+        status_code=502,
+        detail=f"Scenario validation failed after retry: {last_validation_error}",
     )
 
 

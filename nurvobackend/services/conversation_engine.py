@@ -1,13 +1,26 @@
 """Conversation engine service for patient and family NPC responses."""
 
+import json
+import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from openai import AsyncOpenAI
 
-from config import OPENAI_API_KEY, OPENAI_CONVERSATION_MODEL, OPENAI_TIMEOUT
+from config import (
+    GAME_TIME_LIMIT,
+    OPENAI_API_KEY,
+    OPENAI_CONVERSATION_MODEL,
+    OPENAI_TIMEOUT,
+    PROACTIVE_COOLDOWN_SECONDS,
+    PROACTIVE_ENDGAME_GUARD_SECONDS,
+)
 from models.chat import GameSession
+from prompts.proactive_speech import build_proactive_decision_prompt
 from services.tts_service import get_family_voice, get_patient_voice
+
+logger = logging.getLogger(__name__)
 
 # Regex to strip leading speaker labels like [病患], [家屬], [家屬1] from GPT output
 _LABEL_RE = re.compile(r"^\[(?:病患|家屬\d*)\]\s*")
@@ -215,3 +228,75 @@ async def maybe_family_interjection(session: GameSession) -> tuple[str, bool, in
     except Exception:
         # Don't fail the main flow for an interjection error
         return "", False, -1
+
+
+_VALID_SPEAKERS = {"patient", "family_0", "family_1", "family_2"}
+
+
+async def maybe_proactive_speak(session: GameSession) -> tuple[str, str, bool]:
+    """Decide whether any NPC should speak proactively after nurse idleness.
+
+    Returns (content, sender, did_speak). Audio is generated separately by the
+    WebSocket router so proactive messages follow the same text-first contract
+    as normal NPC replies.
+    """
+    now = datetime.now(timezone.utc)
+
+    if session.last_proactive_at is not None:
+        since_last = (now - session.last_proactive_at).total_seconds()
+        if since_last < PROACTIVE_COOLDOWN_SECONDS:
+            return "", "", False
+
+    if session.start_time is not None:
+        elapsed = (now - session.start_time).total_seconds()
+        remaining = GAME_TIME_LIMIT - elapsed
+        if remaining < PROACTIVE_ENDGAME_GUARD_SECONDS:
+            return "", "", False
+
+    if not any(message.sender == "nurse" for message in session.conversation_history):
+        return "", "", False
+
+    system_prompt = build_proactive_decision_prompt(session, session.proactive_streak)
+
+    try:
+        response = await _client.chat.completions.create(
+            model=OPENAI_CONVERSATION_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "請依規則輸出嚴格 JSON。"},
+            ],
+            temperature=0.8,
+            max_tokens=150,
+            timeout=OPENAI_TIMEOUT,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        if not content:
+            return "", "", False
+
+        data = json.loads(content)
+    except Exception as exc:
+        logger.warning("proactive_speech decision failed: %s", exc)
+        return "", "", False
+
+    if not isinstance(data, dict) or not data.get("speak"):
+        return "", "", False
+
+    speaker = data.get("speaker")
+    text = data.get("content")
+    if speaker not in _VALID_SPEAKERS or not isinstance(text, str):
+        return "", "", False
+
+    if speaker.startswith("family_"):
+        family_index = int(speaker.split("_")[1])
+        if family_index >= len(session.family_system_prompts):
+            return "", "", False
+
+    clean_text = _LABEL_RE.sub("", text.strip())
+    if not clean_text:
+        return "", "", False
+
+    session.proactive_streak += 1
+    session.last_proactive_at = now
+    return clean_text, speaker, True

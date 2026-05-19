@@ -73,6 +73,7 @@ export interface ChatMessage {
   timestamp: string
   elapsed_seconds: number
   is_interjection: boolean
+  is_proactive?: boolean
   audio_base64?: string
 }
 
@@ -142,6 +143,19 @@ export interface WsNpcMessage {
   message_id: string
   elapsed_seconds: number
   is_interjection?: boolean
+  is_proactive?: boolean
+}
+
+export type WsActivityKind =
+  | 'typing_start'
+  | 'typing_end'
+  | 'audio_start'
+  | 'audio_end'
+  | 'connection_resumed'
+
+export interface WsActivityMessage {
+  type: 'activity'
+  kind: WsActivityKind
 }
 
 export interface WsNpcAudioMessage {
