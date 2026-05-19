@@ -91,8 +91,21 @@ function enterScene(): void {
         <header class="briefing-header">
           <p class="briefing-eyebrow">Clinical Scenario Briefing</p>
           <h1 class="briefing-title">任務簡報</h1>
-          <p class="briefing-subtitle">請仔細閱讀以下病患資料，準備進入溝通場景</p>
         </header>
+
+        <div class="two-col-row">
+          <div class="info-card goals-card">
+            <div class="goals-title">&#x1F3AF; 溝通挑戰</div>
+            <ul class="goals-list">
+              <!-- <li
+                v-for="challenge in scenarioStore.scenario.communication_challenges"
+                :key="challenge"
+              >{{ challenge }}</li> -->
+              <p>1. 透過與病患或病患家屬溝通獲得特定資訊</p>
+              <p>2. 透過溝通技巧安撫病患或家屬的情緒</p>
+            </ul>
+          </div>
+        </div>
 
         <div class="patient-card-wrap">
           <PatientCard
@@ -122,17 +135,7 @@ function enterScene(): void {
           </div>
         </div>
 
-        <div class="two-col-row">
-          <div class="info-card goals-card">
-            <div class="goals-title">&#x1F3AF; 溝通挑戰</div>
-            <ul class="goals-list">
-              <li
-                v-for="challenge in scenarioStore.scenario.communication_challenges"
-                :key="challenge"
-              >{{ challenge }}</li>
-            </ul>
-          </div>
-        </div>
+
 
         <div class="action-bar">
           <div class="time-info">
@@ -249,6 +252,15 @@ function enterScene(): void {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+  width: 100%;
+  margin: 0; /* remove extra padding so it aligns with other sections */
+}
+
+/* Make goals card span full width */
+.two-col-row > .info-card.goals-card {
+  grid-column: 1 / -1;
+  align-items: center;
+  text-align: center;
 }
 
 .info-card {
@@ -336,10 +348,11 @@ function enterScene(): void {
 
 .goals-list {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 0; /* remove left padding for centered alignment */
   display: flex;
   flex-direction: column;
   gap: 6px;
+  align-items: center;
 }
 
 .goals-list li {

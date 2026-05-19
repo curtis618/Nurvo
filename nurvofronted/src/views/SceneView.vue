@@ -19,8 +19,28 @@ const gameStore = useGameStore()
 const chatStore = useChatStore()
 
 const showPatientInfo = ref<boolean>(false)
+const currentHintStep = ref<1 | 2 | null>(null)
 const remainingSeconds = ref<number>(480)
 let timerInterval: ReturnType<typeof setInterval> | null = null
+
+const showChatHint = computed<boolean>(() => currentHintStep.value !== null)
+
+const chatHintTitle = computed<string>(() => {
+  if (currentHintStep.value === 1) return '步驟 1/2'
+  return '步驟 2/2'
+})
+
+const chatHintText = computed<string>(() => {
+  if (currentHintStep.value === 1) {
+    return '護理師先輸入：請先在底部聊天輸入匡輸入訊息，向病人打招呼。'
+  }
+  return '可切上方角色：點選上方角色按鈕，指定由病患或家屬回應。'
+})
+
+const chatHintClass = computed<string>(() => {
+  if (currentHintStep.value === 1) return 'chat-hint--step-1'
+  return 'chat-hint--step-2'
+})
 
 const scenarioTitle = computed<string>(() => {
   if (!scenarioStore.scenario) return ''
@@ -54,11 +74,25 @@ function interruptGame(): void {
   router.push('/')
 }
 
+function nextChatHint(): void {
+  if (currentHintStep.value === 1) {
+    currentHintStep.value = 2
+    return
+  }
+  currentHintStep.value = null
+}
+
+function closeChatHint(): void {
+  currentHintStep.value = null
+}
+
 onMounted(() => {
   if (!scenarioStore.scenario || !gameStore.sessionId) {
     router.replace('/')
     return
   }
+
+  currentHintStep.value = 1
 
   if (scenarioStore.scenario) {
     remainingSeconds.value = scenarioStore.scenario.time_limit_seconds
@@ -152,6 +186,24 @@ onBeforeUnmount(() => {
           <ChatPanel />
         </div>
       </aside>
+
+      <div
+        v-if="showChatHint"
+        class="chat-hint"
+        :class="chatHintClass"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="chat-hint__arrow" aria-hidden="true"></div>
+        <p class="chat-hint__title">{{ chatHintTitle }}</p>
+        <p class="chat-hint__text">{{ chatHintText }}</p>
+        <div class="chat-hint__actions">
+          <button class="chat-hint__close" @click="closeChatHint">略過</button>
+          <button class="chat-hint__next" @click="nextChatHint">
+            {{ currentHintStep === 1 ? '下一步' : '完成' }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <Dialog
@@ -415,7 +467,120 @@ onBeforeUnmount(() => {
   z-index: 2;
 }
 
+.chat-hint {
+  position: absolute;
+  right: clamp(462px, 38vw, 520px);
+  width: min(320px, 36vw);
+  border-radius: 14px;
+  border: 1px solid rgba(147, 197, 253, 0.9);
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.18);
+  padding: 12px 14px 14px;
+  z-index: 4;
+}
+
+.chat-hint--step-1 {
+  top: auto;
+  bottom: 28px;
+}
+
+.chat-hint--step-2 {
+  top: 38px;
+}
+
+.chat-hint__arrow {
+  position: absolute;
+  right: -9px;
+  width: 16px;
+  height: 16px;
+  transform: rotate(45deg);
+  background: rgba(255, 255, 255, 0.97);
+  border-top: 1px solid rgba(147, 197, 253, 0.9);
+  border-right: 1px solid rgba(147, 197, 253, 0.9);
+}
+
+.chat-hint--step-1 .chat-hint__arrow {
+  top: auto;
+  bottom: 26px;
+}
+
+.chat-hint--step-2 .chat-hint__arrow {
+  top: 22px;
+}
+
+.chat-hint__title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.chat-hint__text {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+.chat-hint__close {
+  border: 1px solid rgba(147, 197, 253, 0.8);
+  background: #eff6ff;
+  color: #1e40af;
+  border-radius: 10px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-hint__close:hover {
+  background: #dbeafe;
+}
+
+.chat-hint__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.chat-hint__next {
+  border: 1px solid #3b82f6;
+  background: #3b82f6;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-hint__next:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
 @media (max-width: 980px) {
+  .chat-hint {
+    right: 20px;
+    width: min(340px, calc(100% - 40px));
+  }
+
+  .chat-hint--step-1 {
+    bottom: 360px;
+  }
+
+  .chat-hint--step-2 {
+    top: auto;
+    bottom: 360px;
+  }
+
+  .chat-hint__arrow {
+    top: auto;
+    right: 44px;
+    bottom: -9px;
+    transform: rotate(135deg);
+  }
+
   .chat-dock {
     position: static;
     width: 100%;
@@ -445,6 +610,22 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
+  .chat-hint {
+    right: 12px;
+    width: calc(100% - 24px);
+    border-radius: 12px;
+  }
+
+  .chat-hint--step-1,
+  .chat-hint--step-2 {
+    bottom: calc(46vh + 16px);
+    top: auto;
+  }
+
+  .chat-hint__arrow {
+    right: 30px;
+  }
+
   .scene-toolbar {
     padding: 10px 12px;
   }
