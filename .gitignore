@@ -31,3 +31,6 @@ coverage/
 .agents/
 .claude/
 skills-lock.json
+
+# agentkit session memory — personal work log, never commit.
+.agent-memory.md
